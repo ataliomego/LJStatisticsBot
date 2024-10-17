@@ -1,47 +1,108 @@
-import os
-import numpy as np
+
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-from dotenv import load_dotenv
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+import numpy as np
 
-# Memuat variabel dari file .env
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-if not TOKEN:
-    raise ValueError("Token tidak ditemukan! Pastikan variabel lingkungan TELEGRAM_BOT_TOKEN sudah diset.")
-
-def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Selamat datang! Kirimkan sampel data dengan format '6.8, 7.2, 6.9, ...'")
-
-def calculate_statistics(update: Update, context: CallbackContext) -> None:
-    try:
-        data = list(map(float, context.args[0].split(',')))
-        n = len(data)
-        mean = np.mean(data)
-        variance = np.var(data, ddof=1)
-        std_dev = np.sqrt(variance)
-        
-        # Format output
-        output = f"""
-        Count (n): {n}
-        Sum (Σx): {sum(data)}
-        Mean (x̄): {mean}
-        Variance (s²): {variance}
-        Standard Deviation (s): {std_dev}
-        """
-        update.message.reply_text(output)
-    except (IndexError, ValueError):
-        update.message.reply_text("Format input tidak valid. Pastikan menggunakan format '6.8, 7.2, 6.9, ...'.")
-
-def main() -> None:
-    updater = Updater(TOKEN)
+# Fungsi untuk menghitung statistik lengkap
+def calculate_detailed_stats(samples):
+    data = np.array(samples)
+    n = len(data)
+    mean = np.mean(data)
+    variance = np.var(data, ddof=1)  # Variansi dengan ddof=1 untuk sampel
+    std_dev = np.sqrt(variance)  # Simpangan baku
+    coeff_variance = std_dev / mean  # Koefisien variasi
+    std_error = std_dev / np.sqrt(n)  # Standard Error of Mean
     
-    updater.dispatcher.add_handler(CommandHandler("start", start))
-    updater.dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, calculate_statistics))
+    sum_squared_diff = np.sum((data - mean) ** 2)  # Jumlah kuadrat selisih
+    solution_table = [(x, x - mean, (x - mean) ** 2) for x in data]  # Tabel xᵢ, xᵢ - x̄, (xᵢ - x̄)²
+    
+    results = {
+        "n": n,
+        "sum": np.sum(data),
+        "mean": mean,
+        "variance": variance,
+        "std_dev": std_dev,
+        "coeff_variance": coeff_variance,
+        "std_error": std_error,
+        "sum_squared_diff": sum_squared_diff,
+        "solution_table": solution_table,
+    }
+    return results
 
-    updater.start_polling()
-    updater.idle()
+# Fungsi untuk menangani input sampel dari pengguna
+async def handle_samples(update: Update, context):
+    message = update.message.text
+    
+    # Parsing input menjadi daftar float
+    try:
+        samples = list(map(float, message.split(',')))
+    except ValueError:
+        await update.message.reply_text("Format salah. Pastikan angka dipisahkan dengan koma.")
+        return
+    
+    # Menghitung hasil
+    results = calculate_detailed_stats(samples)
+    
+    # Membuat output dengan Markdown
+    response = (
+        f"*Count (n)*: {results['n']}\n"
+        f"*Sum (Σx)*: {results['sum']:.2f}\n"
+        f"*Mean (x̄)*: {results['mean']:.3f}\n"
+        f"*Variance (s²)*: {results['variance']:.2f}\n"
+        f"*Coefficient Of Variance*: {results['coeff_variance']:.4f}\n"
+        f"*Standard Error of Mean (SE)*: {results['std_error']:.10f}\n"
+        f"\n*Solution*:\n"
+        f"s = Σᵢ=₁ⁿ (xᵢ - x̄)² / (n-1)\n"
+        f"s = {results['sum_squared_diff']:.6f} / {results['n'] - 1}\n"
+        f"s = {results['variance']:.6f}\n"
+        f"s = √{results['variance']:.6f} = {results['std_dev']:.4f}\n\n"
+        f"xᵢ\t xᵢ - x̄\t (xᵢ - x̄)²\n"
+    )
+    
+    # Menambahkan tabel solusi ke dalam output
+    for row in results['solution_table']:
+        response += f"{row[0]:.2f}\t {row[1]:.3f}\t {row[2]:.6f}\n"
+    
+    response += f"Σxᵢ = {results['sum']:.2f}\t\t Σ(xᵢ - x̄)² = {results['sum_squared_diff']:.6f}\n"
+    
+    # Mengirim balasan ke pengguna dengan format Markdown
+    await update.message.reply_text(response, parse_mode="Markdown")
 
-if __name__ == '__main__':
-    main() 
+# Fungsi untuk memulai bot
+async def start(update: Update, context):
+    await update.message.reply_text("Masukkan sampel dengan format: 6.8, 7.2, 6.9, ...")
+
+# Fungsi untuk memberikan bantuan
+async def help_command(update: Update, context):
+    help_text = (
+        "Saya dapat membantu Anda menghitung nilai statistik!\n"
+        "Masukkan sampel angka dalam format: `6.8, 7.2, 6.9, ...`\n"
+        "Saya akan menghitung:\n"
+        "- Jumlah data (n)\n"
+        "- Jumlah total (Σx)\n"
+        "- Rata-rata (x̄)\n"
+        "- Variansi (s²)\n"
+        "- Koefisien Variasi\n"
+        "- Standard Error of Mean (SE)\n\n"
+        "Gunakan perintah /start untuk memulai!"
+    )
+    await update.message.reply_text(help_text)
+
+# Fungsi utama untuk menjalankan bot
+def main():
+    # Masukkan token bot Anda di sini
+    TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+
+    # Buat aplikasi bot
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    # Daftarkan command dan handler pesan
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(filters.TEXT, handle_samples))
+
+    # Jalankan bot
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
